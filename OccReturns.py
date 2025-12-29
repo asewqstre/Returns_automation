@@ -161,7 +161,7 @@ class OccReturns(OccReturnsBase):
 
         if http_method.lower() == "delete":
             for _ in range(2):        # 2 attempts: initial + after refresh
-                response = requests.get(url=url, params=kwargs["params"], headers=kwargs["headers"])
+                response = requests.delete(url=url, params=kwargs["params"], headers=kwargs["headers"])
 
                 if response.status_code != 401:
                     return response
@@ -289,19 +289,7 @@ class OccReturns(OccReturnsBase):
         headers = self._build_headers(Authorization=f"{token_data['token_type']} {token_data['access_token']}")
         
         response = self._send_request(url, http_method="delete", headers=headers, params=params)
+        response.raise_for_status()
 
+        return response.status_code
 
-if __name__ == "__main__":
-    Returns = OccReturns()
-    # access_token = Returns.refresh_token()["access_token"]
-    # print(Returns.get_returns(date_from="2025-11-02", date_to="2025-11-05", ))
-    
-    # return_data = Returns.create_comment(84630001, ".")
-    
-    # for i in range(len(return_data["cisComments"])):
-    #     if return_data["cisComments"][i]["text"] == ".":
-    #         comment_num = return_data["cisComments"][i]["code"]
-
-    # Returns.delete_comment(84630001, comment_num)
-
-    # print(return_data)
