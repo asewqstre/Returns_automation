@@ -26,6 +26,8 @@ class OccReturns(OccReturnsBase):
 
     TOKEN_PATH = "./token.json"
 
+    # ===== Token handling =====
+
     def _load_token(self):
         """
         Load token from token.json with sanity checks.
@@ -58,22 +60,6 @@ class OccReturns(OccReturnsBase):
         with open(self.TOKEN_PATH, "w", encoding="utf-8") as file:
             json.dump(token_data, file, ensure_ascii=False, indent=2)
 
-    def _build_headers(self, token, content_type):
-        """
-        Build request headers using the loaded or refreshed token.
-
-        Args:
-            token (dict): Token object containing token_type and access_token.
-            content_type (str): Content-Type of request.
-
-        Returns:
-            dict: Fully prepared request headers.
-        """
-        return {
-            "Authorization": f"{token['token_type']} {token['access_token']}",
-            "Content-Type": content_type
-        }
-
     def _refresh_token(self):
         """
         Request a fresh token from OCC and save it to token.json.
@@ -95,36 +81,47 @@ class OccReturns(OccReturnsBase):
 
         self._save_token(token_data)
         return token_data
+    
+    # ===== Request builders =====
 
-    def _build_params(self, fields, sort, page_size, current_page):
+    def _build_headers(self, **kwargs):
         """
-        Build query parameters for the returns list API.
+        Build request headers using the loaded or refreshed token.
 
         Returns:
-            dict: Dictionary of query params.
+            dict: Fully prepared request headers.
         """
-        return {
-            "fields": fields,
-            "sort": sort,
-            "pageSize": page_size,
-            "currentPage": current_page
-        }
+        return {k: v for k, v in kwargs.items() if v is not None}
 
-    def _build_body(self, country, channel, date_from, date_to):
+    def _build_params(self, **kwargs):
+        """
+        Build query parameters for OCC API requests.
+
+        The method:
+        - accepts an arbitrary set of query parameters,
+        - removes parameters with None values,
+        - returns a clean dictionary suitable for HTTP requests.
+
+        Args:
+            **kwargs: Arbitrary keyword arguments representing query parameters.
+
+        Returns:
+            dict: Dictionary of query parameters without None values.
+        """
+        return {k: v for k, v in kwargs.items() if v is not None}
+
+    def _build_body(self, **kwargs):
         """
         Build POST request body for returns list API.
 
         Returns:
             dict: POST body.
         """
-        return {
-            "countyIsoCode": country,
-            "channel": channel,
-            "dateFrom": date_from,
-            "dateTo": date_to
-        }
+        return {k: v for k, v in kwargs.items() if v is not None}
 
-    def _send_request(self, url, params, headers, body):
+    # ===== HTTP layer =====
+
+    def _send_request(self, url, http_method: str, **kwargs):
         """
         Execute POST request with automatic token refresh on 401 responses.
 
@@ -135,25 +132,49 @@ class OccReturns(OccReturnsBase):
 
         Args:
             url (str): API endpoint.
-            params (dict): URL query parameters.
-            headers (dict): Request headers.
-            body (dict): POST request body.
+            http_method (str): request method.
 
         Returns:
             Response: HTTP response object (possibly with 401 if repeated).
         """
-        for _ in range(2):        # 2 attempts: initial + after refresh
-            response = requests.post(url=url, params=params, headers=headers, json=body)
+        if http_method.lower() == "post":
+            for _ in range(2):        # 2 attempts: initial + after refresh
+                response = requests.post(url=url, params=kwargs["params"], headers=kwargs["headers"], json=kwargs["body"])
 
-            if response.status_code != 401:
-                return response
+                if response.status_code != 401:
+                    return response
 
-            # 401 -> refresh token and retry
-            new_token = self._refresh_token()
-            headers["Authorization"] = f"{new_token['token_type']} {new_token['access_token']}"
+                # 401 -> refresh token and retry
+                new_token = self._refresh_token()
+                kwargs["headers"]["Authorization"] = f"{new_token['token_type']} {new_token['access_token']}"
+
+        if http_method.lower() == "get":
+            for _ in range(2):        # 2 attempts: initial + after refresh
+                response = requests.get(url=url, params=kwargs["params"], headers=kwargs["headers"])
+
+                if response.status_code != 401:
+                    return response
+
+                # 401 -> refresh token and retry
+                new_token = self._refresh_token()
+                kwargs["headers"]["Authorization"] = f"{new_token['token_type']} {new_token['access_token']}"
+
+        if http_method.lower() == "delete":
+            for _ in range(2):        # 2 attempts: initial + after refresh
+                response = requests.get(url=url, params=kwargs["params"], headers=kwargs["headers"])
+
+                if response.status_code != 401:
+                    return response
+
+                # 401 -> refresh token and retry
+                new_token = self._refresh_token()
+                kwargs["headers"]["Authorization"] = f"{new_token['token_type']} {new_token['access_token']}"
+            
 
         return response   # return last response anyway
     
+    # ===== Public API =====
+
     def get_returns(
             self,
             date_from: str = str(date.today() - timedelta(5)),
@@ -192,20 +213,95 @@ class OccReturns(OccReturnsBase):
         """
 
         url = os.getenv("RETURNS_LIST_URL")
-        params = self._build_params(fields, sort, page_size, current_page)
-        body = self._build_body(country, channel, date_from, date_to)
+        params = self._build_params(fields=fields, sort=sort, pageSize=page_size, currentPage=current_page)
+        body = self._build_body(county=country, channel=channel, dateFrom=date_from, dateTo=date_to)
 
         # Load token once
         token_data = self._load_token()
-        headers = self._build_headers(token_data, content_type)
+        headers = self._build_headers(Authorization=f"{token_data['token_type']} {token_data['access_token']}", Content_Type=content_type)
 
-        response = self._send_request(url, params, headers, body)
+        response = self._send_request(url, http_method="post", params=params, headers=headers, body=body)
         response.raise_for_status()
 
         return response.json()
+    
+    def create_comment(self, return_num, comment):
+        """
+        Create a comment for a specific return in OCC.
+
+        The method:
+        - loads (or refreshes) token,
+        - builds request url, body, and headers,
+        - sends POST request to create a comment,
+        - raises an error for any non-200 result,
+        - returns parsed JSON response.
+
+        Args:
+            return_num (str): Return number to which the comment will be added.
+            comment (str): Comment text to create.
+            *args: Additional positional arguments (not used).
+            **kwargs: Additional keyword arguments (not used).
+
+        Returns:
+            dict: Parsed JSON with created comment data.
+        """
+
+        url = os.getenv("CREATE_COMMENT_URL").format(return_num=return_num)
+
+        params = {}
+        body = self._build_body(comment=comment)
+
+        # Load token
+        token_data = self._load_token()
+        headers = self._build_headers(Authorization=f"{token_data['token_type']} {token_data['access_token']}")
+
+        response = self._send_request(url, http_method="post", headers=headers, params=params, body=body)
+        response.raise_for_status()
+
+        return response.json()
+
+    def delete_comment(self, return_num, comment_num) -> None:
+        """
+        Delete a comment from a specific return in OCC.
+
+        The method:
+        - loads (or refreshes) token,
+        - builds request url and headers,
+        - sends DELETE request to remove the comment,
+        - raises an error for any non-200 result.
+
+        Args:
+            return_num (str): Return number containing the comment.
+            comment_num (str): Comment identifier to delete.
+            *args: Additional positional arguments (not used).
+            **kwargs: Additional keyword arguments (not used).
+
+        Returns:
+            None: No content is returned on successful deletion.
+        """
+
+        url = os.getenv("DELETE_COMMENT_URL").format(return_num=return_num, comment_num=comment_num)
+
+        params = {}
+
+        # Load token
+        token_data = self._load_token()
+        headers = self._build_headers(Authorization=f"{token_data['token_type']} {token_data['access_token']}")
         
+        response = self._send_request(url, http_method="delete", headers=headers, params=params)
+
 
 if __name__ == "__main__":
     Returns = OccReturns()
     # access_token = Returns.refresh_token()["access_token"]
-    print(Returns.get_returns(date_from="2025-11-02", date_to="2025-11-05", ))
+    # print(Returns.get_returns(date_from="2025-11-02", date_to="2025-11-05", ))
+    
+    # return_data = Returns.create_comment(84630001, ".")
+    
+    # for i in range(len(return_data["cisComments"])):
+    #     if return_data["cisComments"][i]["text"] == ".":
+    #         comment_num = return_data["cisComments"][i]["code"]
+
+    # Returns.delete_comment(84630001, comment_num)
+
+    # print(return_data)
