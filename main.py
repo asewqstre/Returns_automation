@@ -45,24 +45,16 @@ class Main:
 
         date_range = self._build_date_range(
             date_from=datetime.datetime.now() - datetime.timedelta(days=30),
-            date_to=datetime.datetime.now()
+            date_to=datetime.datetime.now() + datetime.timedelta(days=1)
         )
 
         returns_list = returns.get_returns(date_from=date_range["from"], date_to=date_range["to"])
         incomplete_returns = self._search_incomplete_returns(returns_list)
-
-        returns_data_list = self._get_returns_data(incomplete_returns=incomplete_returns)
-
-        final_dict = {"incomplete_returns": incomplete_returns, "returns_list": returns_list, "returns_data_list": returns_data_list}
+        final_dict = self._simplify_returns_list(returns_list, incomplete_returns)
 
         url = os.getenv("POWER_AUTOMATE_URL")
         response = requests.post(url=url, json=final_dict)
         response.raise_for_status()
-        print(final_dict)
-        print(response.status_code)
-        with open("./output.json", "w", encoding="utf-8") as file:
-            import json
-            json.dump(final_dict, file, ensure_ascii=False, indent=4)
 
     def _get_returns_data(self, incomplete_returns: list) -> list:
         """
@@ -147,6 +139,88 @@ class Main:
                 incomplete_returns.append(return_item["code"])
         return incomplete_returns
     
+    def _simplify_returns_list(self, returns_list: dict, incomplete_returns: dict) -> dict:
+        """
+        Simplify and enrich incomplete returns data.
+
+        The method:
+          - iterates through the full OCC returns list,
+          - filters returns that are present in `incomplete_returns`,
+          - retrieves detailed return data via `_get_returns_data()`,
+          - extracts and normalizes key fields for each return,
+          - builds a flattened list of simplified return objects.
+
+        Args:
+            returns_list (dict): Parsed JSON response
+                                 returned by `get_returns()`.
+            incomplete_returns (list): List of return codes
+                                       awaiting approval.
+
+        Returns:
+            list: List of simplified incomplete returns.
+        """
+        returns = returns_list["returns"] # Full returns list
+        returns_data = self._get_returns_data(incomplete_returns) # Detailed returns data
+            
+        simplified_returns = []
+
+        for return_item in returns:
+            code = return_item.get("code", None) # Номер возврата
+            if code is None:
+                simplified_returns.append({"error": "Return item has no code"})
+
+            if code not in incomplete_returns:
+                continue
+            return_abo = return_item.get("returnAbo", {}).get("uid", "") # Номер АБО
+            comments = return_item.get("cisComments", "") # Комментарии
+            comments = [{"author": comment.get("author", "").get("name", ""), "text": comment.get("text", "")} for comment in comments] # Keep only author name and text
+            full_return = return_item.get("fullReturn", "") # Полный возврат
+            uid = return_item.get("order", {}).get("account", {}).get("uid", "") # Номер НПА
+            order_code = return_item.get("order", {}).get("code", "") # Номер заказа
+            status_display = return_item.get("statusDisplay", "") # Статус возврата
+            returns_request_reason = return_item.get("returnRequestReason", {}).get("name", "") # Причина возврата
+            ordered_goods_type = return_item.get("orderedGoodsType", {}).get("name", "") # Способ возврата
+            refund_info = return_item.get("refundInfo", [])
+            return_value = return_item.get("returnValue", 0.0000) # Сумма возврата
+            refund_status_display = return_item.get("refundStatusDisplay", {}).get("name", "") # Статус возврата
+            return_date = return_item.get("date", "") # Дата создания возврата
+            returned_goods_type = return_item.get("returnedGoodsType", {}).get("name", "")
+            order_type = return_item.get("order", {}).get("orderGroupType", "")
+            for return_detailed in returns_data:
+                if return_detailed.get("rma", "") != code:
+                    continue
+                group_number = return_detailed.get("order", {}).get("groupNumber", "")
+                sku_and_quantity = [str(entry.get("productSku")) + " " + str(entry.get("expectedQuantity")) for entry in return_detailed.get("entries", [])]
+                initial_comment = [entry.get("cisComment", []) for entry in return_detailed.get("entries", [])]
+                order_warehouse_name = return_detailed.get("entries", [])[0].get("orderEntry", {}).get("warehouseName", "")
+                return_warehouse_name = return_detailed.get("warehouseName", "")
+                initial_comment2 = return_detailed.get("comment", "")
+
+            simplified_returns.append({
+                "code": code,
+                "group_number": group_number,
+                "return_abo": return_abo,
+                "comments": comments,
+                "fullReturn": full_return,
+                "uid": uid,
+                "order_code": order_code,
+                "status_display": status_display,
+                "returns_request_reason": returns_request_reason,
+                "ordered_goods_type": ordered_goods_type,
+                "refund_info": refund_info,
+                "return_value": return_value,
+                "sku_and_quantity": sku_and_quantity,
+                "return_warehouse_name": return_warehouse_name,
+                "order_warehouse_name": order_warehouse_name,
+                "initial_comment": initial_comment,
+                "return_date": return_date,
+                "refund_status_display": refund_status_display,
+                "initial_comment2": initial_comment2,
+                "order_type": order_type,
+                "returned_goods_type": returned_goods_type
+            })
+        return simplified_returns
+                
 
 if __name__ == "__main__":
     main = Main()
