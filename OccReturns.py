@@ -293,3 +293,38 @@ class OccReturns(OccReturnsBase):
 
         return response.status_code
 
+    def get_order_data(
+            self,
+            order_num: int,
+            fields: str = "CIS_BOSS_FULL,cisComments"
+            ) -> dict:
+        """
+        Get order data for a given order number.
+
+        The method:
+        - loads (or refreshes) token,
+        - builds request url and headers,
+        - sends GET request to retrieve order data,
+        - raises an error for any non-200 result,
+        - returns the order data.
+
+        Args:
+            order_num (int): Order number to query.
+        """
+        url = os.getenv("GET_RETURN_DATA_URL").format(order_num=order_num)
+
+        token_data = self._load_token()
+        headers = self._build_headers(Authorization=f"{token_data['token_type']} {token_data['access_token']}")
+        params = self._build_params(fields=fields)
+        
+        response = self._send_request(url, http_method="get", headers=headers, params=params)
+        response.raise_for_status()
+
+        return response.json()
+    
+
+if __name__ == "__main__":
+    occ_client = OccReturns()
+    returns_data = occ_client.get_order_data(839314123)
+    with io.open("order_data.json", "w", encoding="utf-8") as file:
+        file.write(json.dumps(returns_data, indent=4, ensure_ascii=False))

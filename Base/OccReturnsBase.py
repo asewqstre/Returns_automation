@@ -75,3 +75,8 @@ class OccReturnsBase(ABC):
     def delete_comment(self, return_num: int, comment_num: int, *args, **kwargs):
         """Delete comment."""
         pass
+
+    @abstractmethod
+    def get_order_data(self, order_num: int, *args, **kwargs) -> dict:
+        """Get order data for a given order number."""
+        pass

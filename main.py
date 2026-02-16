@@ -186,6 +186,7 @@ class Main:
             return_date = return_item.get("date", "") # Дата создания возврата
             returned_goods_type = return_item.get("returnedGoodsType", {}).get("name", "")
             order_type = return_item.get("order", {}).get("orderGroupType", "")
+            group_order_code = self.get_group_number(order_num=order_code)
             for return_detailed in returns_data:
                 if return_detailed.get("rma", "") != code:
                     continue
@@ -217,9 +218,16 @@ class Main:
                 "refund_status_display": refund_status_display,
                 "initial_comment2": initial_comment2,
                 "order_type": order_type,
-                "returned_goods_type": returned_goods_type
+                "returned_goods_type": returned_goods_type,
+                "group_order_code": group_order_code
             })
         return simplified_returns
+
+    def get_group_number(self, order_num: int) -> int:
+        """Get group number for a given order number."""
+        returns = OccReturns()
+        order_data = returns.get_order_data(order_num=order_num)
+        return order_data.get("groupNumber", "")
                 
 
 if __name__ == "__main__":
